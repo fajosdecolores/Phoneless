@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Waves, 
   BarChart2, 
@@ -11,21 +11,23 @@ import {
   Settings as SettingsIcon, 
   Clock, 
   Calendar, 
-  Trophy,
-  Film,
-  Dumbbell,
-  Zap,
-  ChevronRight,
-  ChevronLeft,
-  Plus,
-  X,
-  Smartphone,
-  Info,
-  User,
-  Bell,
-  Shield,
-  Palette,
-  Check
+  Trophy, 
+  Film, 
+  Dumbbell, 
+  Zap, 
+  ChevronRight, 
+  ChevronLeft, 
+  Plus, 
+  X, 
+  Smartphone, 
+  Info, 
+  User as UserIcon, 
+  Bell, 
+  Shield, 
+  Palette, 
+  Check, 
+  History, 
+  Timer 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -36,10 +38,33 @@ import {
   CartesianGrid, 
   Tooltip, 
   ResponsiveContainer,
-  Cell
+  Cell,
+  PieChart,
+  Pie
 } from 'recharts';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+
+// --- Custom Helpers ---
+import { 
+  loadState, 
+  saveState, 
+  updateActiveSession, 
+  clearActiveSession, 
+  addSessionToHistory,
+  resetState,
+  type User,
+  type DockSession,
+  type UserStats
+} from './lib/storage';
+import { 
+  calculateElapsed, 
+  getStageFromSeconds, 
+  formatTime, 
+  getProgressToNextStage,
+  DAILY_GOAL_SECONDS,
+  STAGE_THRESHOLDS
+} from './lib/timer';
 
 // --- Utilities ---
 function cn(...inputs: ClassValue[]) {
@@ -339,13 +364,42 @@ const CoralSelectionScreen = ({ onSelect }: { onSelect: (variant: string) => voi
   );
 };
 
-const DockModeDisplay = ({ variant, day, onExit }: { variant: string, day: number, onExit: () => void }) => {
-  const [time, setTime] = useState(new Date());
+const DockModeDisplay = ({ variant, day, onExit, sessionStartAt, dockId }: { variant: string, day: number, onExit: (session?: DockSession) => void, sessionStartAt: number, dockId?: string }) => {
+  const [now, setNow] = useState(Date.now());
+  const [isEnding, setIsEnding] = useState(false);
 
-  React.useEffect(() => {
-    const timer = setInterval(() => setTime(new Date()), 1000);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const { rawSeconds, validSeconds } = calculateElapsed(sessionStartAt);
+  const currentStage = getStageFromSeconds(validSeconds);
+  const progress = getProgressToNextStage(validSeconds);
+
+  const currentTimeString = new Date(now).toLocaleTimeString([], { 
+    hour: '2-digit', 
+    minute: '2-digit',
+    hour12: false 
+  });
+
+  const handleEndSession = () => {
+    setIsEnding(true);
+    // Small delay for animation feel
+    setTimeout(() => {
+      const session: DockSession = {
+        id: `session-${Date.now()}`,
+        dockId,
+        userId: 'user-1', // Hardcoded for now
+        startAt: sessionStartAt,
+        endAt: Date.now(),
+        rawDurationSeconds: rawSeconds,
+        validDurationSeconds: validSeconds,
+        stageReached: currentStage.stage,
+      };
+      onExit(session);
+    }, 800);
+  };
 
   return (
     <motion.div
@@ -360,46 +414,102 @@ const DockModeDisplay = ({ variant, day, onExit }: { variant: string, day: numbe
         <div className="absolute top-[-10%] left-[-10%] w-[120%] h-[120%] bg-[radial-gradient(circle_at_50%_50%,rgba(72,202,228,0.1),transparent_70%)] animate-pulse" />
       </div>
 
-      <button 
-        onClick={onExit}
-        className="absolute top-12 right-6 w-12 h-12 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white/50 hover:text-white transition-colors"
-      >
-        <X className="w-6 h-6" />
-      </button>
-
-      <div className="relative z-10 flex flex-col items-center text-center">
+      <div className="relative z-10 flex flex-col items-center text-center w-full px-6">
         <motion.div
           initial={{ y: 20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="mb-12"
+          transition={{ delay: 0.2 }}
+          className="mb-8"
         >
           <h1 className="text-8xl font-light text-white tracking-tighter">
-            {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+            {currentTimeString}
           </h1>
-          <p className="text-white/30 font-light tracking-[0.3em] uppercase mt-4">Docked Mode</p>
+          <p className="text-white/30 font-light tracking-[0.3em] uppercase mt-4">
+            {dockId ? `Docked: ${dockId}` : 'Dock Mode Active'}
+          </p>
         </motion.div>
 
-        <div className="scale-150">
-          <BranchingCoral variant={variant} day={day} />
+        <div className="relative mb-12">
+          {/* Progress Ring */}
+          <div className="absolute inset-0 flex items-center justify-center -m-12">
+            <svg viewBox="0 0 320 320" className="w-[320px] h-[320px] rotate-[-90deg]">
+              <circle
+                cx="160"
+                cy="160"
+                r="140"
+                fill="none"
+                stroke="rgba(255,255,255,0.05)"
+                strokeWidth="2"
+              />
+              <motion.circle
+                cx="160"
+                cy="160"
+                r="140"
+                fill="none"
+                stroke={CORAL_VARIANTS.find(v => v.id === variant)?.colors.end || "#48CAE4"}
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray="880"
+                initial={{ strokeDashoffset: 880 }}
+                animate={{ strokeDashoffset: 880 - (880 * progress) }}
+                transition={{ duration: 1 }}
+              />
+            </svg>
+          </div>
+          <div className="scale-125">
+            <BranchingCoral variant={variant} day={day} />
+          </div>
         </div>
 
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 1 }}
-          className="mt-20"
+          transition={{ delay: 0.5 }}
+          className="space-y-6 w-full max-w-xs"
         >
-          <p className="text-white/40 font-light italic text-lg">Restoring your digital reef...</p>
+          <button
+            onClick={handleEndSession}
+            disabled={isEnding}
+            className={cn(
+              "w-full py-5 rounded-2xl font-medium transition-all shadow-xl flex items-center justify-center gap-2",
+              isEnding 
+                ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
+                : "bg-white text-slate-900 hover:bg-slate-100 active:scale-[0.98]"
+            )}
+          >
+            {isEnding ? (
+              <motion.div 
+                animate={{ rotate: 360 }} 
+                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              >
+                <Clock className="w-5 h-5" />
+              </motion.div>
+            ) : (
+              <>
+                <X className="w-5 h-5" />
+                End Dock Session
+              </>
+            )}
+          </button>
         </motion.div>
       </div>
     </motion.div>
   );
 };
 
-const CoralScreen = ({ variant, day, progress }: { variant: string, day: number, progress: number }) => {
+const CoralScreen = ({ variant, day, stats }: { variant: string, day: number, stats: UserStats }) => {
   const [showStreakPanel, setShowStreakPanel] = useState(false);
   const [showEvolutionInfo, setShowEvolutionInfo] = useState(false);
+  
+  const totalValidMinutes = Math.floor(stats.totalValidSeconds / 60);
+  const progress = Math.min(1, stats.dailyProgressSeconds / DAILY_GOAL_SECONDS);
+
+  const remainingSeconds = Math.max(0, DAILY_GOAL_SECONDS - stats.dailyProgressSeconds);
+  const remainingHours = Math.floor(remainingSeconds / 3600);
+  const remainingMins = Math.floor((remainingSeconds % 3600) / 60);
+
+  const today = new Date().toISOString().split('T')[0];
+  const isCompletedToday = stats.lastCompletedDate === today;
 
   return (
     <motion.div 
@@ -453,8 +563,10 @@ const CoralScreen = ({ variant, day, progress }: { variant: string, day: number,
       <div className="flex-1 flex flex-col items-center w-full px-6 pt-16">
         {/* Statistic Text - Aligned higher and refined typography */}
         <div className="text-center mb-10">
-          <h2 className="text-5xl font-light text-muted-navy tracking-tight">3h 20m</h2>
-          <p className="text-slate-400 font-light tracking-wide mt-1">phone-free today</p>
+          <h2 className="text-5xl font-light text-muted-navy tracking-tight">
+            {Math.floor(totalValidMinutes / 60)}h {totalValidMinutes % 60}m
+          </h2>
+          <p className="text-slate-400 font-light tracking-wide mt-1">phone-free total</p>
         </div>
 
         <div className="relative group cursor-pointer mb-10 w-[320px] h-[320px] flex items-center justify-center" onClick={() => setShowEvolutionInfo(!showEvolutionInfo)}>
@@ -500,9 +612,15 @@ const CoralScreen = ({ variant, day, progress }: { variant: string, day: number,
                 )}
               >
                 <p className="text-sm font-medium text-slate-600">
-                  Next coral stage in: <span className="text-slate-900">1h 40m</span>
+                  {isCompletedToday ? (
+                    <span className="text-emerald-600">Day {day} Goal Completed!</span>
+                  ) : (
+                    <>Next coral stage in: <span className="text-slate-900">{remainingHours}h {remainingMins}m</span></>
+                  )}
                 </p>
-                <p className="text-[10px] text-slate-400 mt-1 font-light tracking-widest uppercase">Evolving soon</p>
+                <p className="text-[10px] text-slate-400 mt-1 font-light tracking-widest uppercase">
+                  {isCompletedToday ? "Rest and return tomorrow" : "Evolving soon"}
+                </p>
               </motion.div>
             )}
           </AnimatePresence>
@@ -516,7 +634,10 @@ const CoralScreen = ({ variant, day, progress }: { variant: string, day: number,
   );
 };
 
-const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay }: { currentDay: number, variant: string, onPreviewDay: (day: number | null) => void, previewDay: number | null }) => {
+const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay, stats, history }: { currentDay: number, variant: string, onPreviewDay: (day: number | null) => void, previewDay: number | null, stats: UserStats, history: DockSession[] }) => {
+  const weeklyTotalSeconds = history.reduce((acc, s) => acc + s.validDurationSeconds, 0);
+  const totalReclaimedHours = Math.floor(stats.totalValidSeconds / 3600);
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -528,7 +649,9 @@ const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay }: { c
       <div className="bg-pastel-blue pt-16 pb-12 px-6 rounded-b-[48px] shadow-[0_10px_30px_-10px_rgba(224,242,247,0.5)]">
         <div className="mb-8">
           <p className="text-[10px] font-medium text-slate-500 uppercase tracking-[0.2em] mb-2">This Week</p>
-          <h2 className="text-4xl font-light text-muted-navy tracking-tight">18h 45m</h2>
+          <h2 className="text-4xl font-light text-muted-navy tracking-tight">
+            {Math.floor(weeklyTotalSeconds / 3600)}h {Math.floor((weeklyTotalSeconds % 3600) / 60)}m
+          </h2>
           <p className="text-sm font-light text-slate-500 mt-1">Phone-free time this week</p>
         </div>
 
@@ -569,8 +692,8 @@ const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay }: { c
               <Clock className="w-5 h-5" />
             </div>
             <div className="flex-1">
-              <p className="text-xs text-slate-400 font-light tracking-wide">Today</p>
-              <p className="text-xl font-medium text-muted-navy">3h 20m</p>
+              <p className="text-xs text-slate-400 font-light tracking-wide">Best Session</p>
+              <p className="text-xl font-medium text-muted-navy">{Math.floor(stats.bestSessionSeconds / 60)}m</p>
             </div>
           </Card>
 
@@ -579,8 +702,8 @@ const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay }: { c
               <Calendar className="w-5 h-5" />
             </div>
             <div className="flex-1">
-              <p className="text-xs text-slate-400 font-light tracking-wide">This Week</p>
-              <p className="text-xl font-medium text-muted-navy">18h 45m</p>
+              <p className="text-xs text-slate-400 font-light tracking-wide">Total Sessions</p>
+              <p className="text-xl font-medium text-muted-navy">{stats.totalSessions}</p>
             </div>
           </Card>
 
@@ -590,7 +713,7 @@ const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay }: { c
             </div>
             <div className="flex-1">
               <p className="text-xs text-slate-400 font-light tracking-wide">Total Reclaimed</p>
-              <p className="text-xl font-medium text-muted-navy">142h</p>
+              <p className="text-xl font-medium text-muted-navy">{totalReclaimedHours}h</p>
             </div>
           </Card>
         </div>
@@ -947,7 +1070,7 @@ const SettingsRow = ({ icon: Icon, label, onClick, rightElement }: { icon?: any,
   </div>
 );
 
-const MainSettingsMenu = ({ onNavigate, onOpenDock }: { onNavigate: (s: string) => void, onOpenDock: () => void }) => (
+const MainSettingsMenu = ({ onNavigate, onOpenDock, onReset }: { onNavigate: (s: string) => void, onOpenDock: () => void, onReset: () => void }) => (
   <motion.div
     key="main-settings"
     initial={{ x: -20, opacity: 0 }}
@@ -980,7 +1103,7 @@ const MainSettingsMenu = ({ onNavigate, onOpenDock }: { onNavigate: (s: string) 
         
         <button
           onClick={onOpenDock}
-          className="w-full py-4 rounded-2xl bg-muted-navy text-white font-medium shadow-lg shadow-muted-navy/10 flex items-center justify-center gap-2"
+          className="w-full py-4 rounded-2xl bg-muted-navy text-white font-medium shadow-lg shadow-muted-navy/20 flex items-center justify-center gap-2"
         >
           <Smartphone className="w-4 h-4" />
           Open Dock View
@@ -991,7 +1114,7 @@ const MainSettingsMenu = ({ onNavigate, onOpenDock }: { onNavigate: (s: string) 
         <h3 className="text-[10px] font-medium text-slate-300 uppercase tracking-[0.2em] px-1">Account</h3>
         <Card className="divide-y divide-slate-50 p-0 overflow-hidden">
           <div className="px-4">
-            <SettingsRow icon={User} label="Profile" onClick={() => onNavigate('profile')} />
+            <SettingsRow icon={UserIcon} label="Profile" onClick={() => onNavigate('profile')} />
             <SettingsRow icon={Bell} label="Notification Reminders" onClick={() => onNavigate('notifications')} />
             <SettingsRow icon={Shield} label="Privacy & Data" onClick={() => onNavigate('privacy')} />
             <SettingsRow icon={Palette} label="Appearance" onClick={() => onNavigate('appearance')} />
@@ -999,7 +1122,14 @@ const MainSettingsMenu = ({ onNavigate, onOpenDock }: { onNavigate: (s: string) 
         </Card>
       </div>
 
-      <div className="pt-4 pb-10">
+      <div className="pt-4 pb-10 space-y-4">
+        <button 
+          onClick={onReset}
+          className="w-full py-4 rounded-2xl bg-red-50 border border-red-100 text-red-500 font-medium text-sm tracking-wide flex items-center justify-center gap-2"
+        >
+          <History className="w-4 h-4" />
+          Reset Experience
+        </button>
         <button className="w-full py-4 rounded-2xl bg-white border border-slate-100 text-slate-400 font-medium text-sm tracking-wide">
           Sign Out
         </button>
@@ -1241,7 +1371,7 @@ const PlaceholderSubScreen = ({ title, onBack }: { title: string, onBack: () => 
   </motion.div>
 );
 
-const SettingsScreen = ({ onOpenDock }: { onOpenDock: () => void }) => {
+const SettingsScreen = ({ onOpenDock, onReset }: { onOpenDock: () => void, onReset: () => void }) => {
   const [subScreen, setSubScreen] = useState<string>('main');
 
   const renderSubScreen = () => {
@@ -1257,7 +1387,7 @@ const SettingsScreen = ({ onOpenDock }: { onOpenDock: () => void }) => {
       case 'appearance':
         return <PlaceholderSubScreen title="Appearance" onBack={() => setSubScreen('main')} />;
       default:
-        return <MainSettingsMenu onNavigate={setSubScreen} onOpenDock={onOpenDock} />;
+        return <MainSettingsMenu onNavigate={setSubScreen} onOpenDock={onOpenDock} onReset={onReset} />;
     }
   };
 
@@ -1284,23 +1414,189 @@ export default function App() {
   const [currentDay, setCurrentDay] = useState(9);
   const [isDockModeOpen, setIsDockModeOpen] = useState(false);
   const [previewDay, setPreviewDay] = useState<number | null>(null);
+  
+  // New State for Dock Mode and Persistence
+  const [appState, setAppState] = useState(() => loadState());
+  const [activeSession, setActiveSession] = useState<{ userId: string, startAt: number, dockId?: string } | null>(null);
 
   const displayDay = previewDay !== null ? previewDay : currentDay;
+
+  // Routing and Session Restoration
+  useEffect(() => {
+    const path = window.location.pathname;
+    const state = loadState();
+    
+    // Check if it's a new day and we need to reset daily progress
+    const today = new Date().toISOString().split('T')[0];
+    state.users.forEach(u => {
+      if (u.stats.lastCompletedDate && u.stats.lastCompletedDate !== today) {
+        u.stats.dailyProgressSeconds = 0;
+      }
+    });
+    saveState(state);
+    setAppState(state);
+
+    // Handle Routing
+    if (path.startsWith('/dock')) {
+      const parts = path.split('/');
+      const dockIdFromUrl = parts[2]; // /dock/123 -> ["", "dock", "123"]
+      
+      // If we land on /dock, start a session if none exists
+      if (!state.activeSession) {
+        const newSession = {
+          userId: state.currentUserId || 'user-1',
+          startAt: Date.now(),
+          dockId: dockIdFromUrl
+        };
+        updateActiveSession(newSession);
+        setActiveSession(newSession);
+        setIsDockModeOpen(true);
+      } else {
+        // Restore existing session
+        setActiveSession(state.activeSession);
+        setIsDockModeOpen(true);
+      }
+    } else if (state.activeSession) {
+      // If not on /dock but have active session, restore it
+      setActiveSession(state.activeSession);
+      setIsDockModeOpen(true);
+    }
+
+    // Initialize user data if needed
+    if (state.users.length > 0) {
+      const currentUser = state.users.find(u => u.id === state.currentUserId);
+      if (currentUser) {
+        setSelectedCoral(currentUser.variant);
+        setHasSelectedCoral(currentUser.hasSelectedCoral);
+        // Streak calculation
+        setCurrentDay(currentUser.stats.currentStreak + 1);
+      }
+    }
+  }, []);
+
+  const handleEndSession = (session?: DockSession) => {
+    if (session) {
+      addSessionToHistory(session);
+      
+      // Handle daily progression logic
+      const state = loadState();
+      const user = state.users.find(u => u.id === session.userId);
+      if (user) {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // If it's a new day and they completed the previous one, reset progress
+        if (user.stats.lastCompletedDate && user.stats.lastCompletedDate !== today) {
+          user.stats.dailyProgressSeconds = 0;
+        }
+
+        // Only add progress if they haven't completed today's goal yet
+        if (user.stats.lastCompletedDate !== today) {
+          user.stats.dailyProgressSeconds += session.validDurationSeconds;
+          
+          if (user.stats.dailyProgressSeconds >= DAILY_GOAL_SECONDS) {
+            user.stats.dailyProgressSeconds = DAILY_GOAL_SECONDS;
+            user.stats.lastCompletedDate = today;
+            user.stats.currentStreak += 1;
+            setCurrentDay(user.stats.currentStreak + 1);
+          }
+        }
+        saveState(state);
+      }
+      
+      // Refresh state from storage
+      setAppState(loadState());
+    }
+    
+    clearActiveSession();
+    setActiveSession(null);
+    setIsDockModeOpen(false);
+    
+    // If we were on /dock, navigate back to home
+    if (window.location.pathname.startsWith('/dock')) {
+      window.history.pushState({}, '', '/');
+    }
+  };
+
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  const handleReset = () => {
+    const newState = resetState();
+    setAppState(newState);
+    setHasSelectedCoral(false);
+    setSelectedCoral('warm');
+    setCurrentDay(1);
+    setActiveTab('coral');
+    setIsDockModeOpen(false);
+    setActiveSession(null);
+    setShowResetConfirm(false);
+    window.history.pushState({}, '', '/');
+  };
+
+  const handleStartDock = () => {
+    const newSession = {
+      userId: appState.currentUserId || 'user-1',
+      startAt: Date.now(),
+    };
+    updateActiveSession(newSession);
+    setActiveSession(newSession);
+    setIsDockModeOpen(true);
+    window.history.pushState({}, '', '/dock');
+  };
 
   const renderScreen = () => {
     if (!hasSelectedCoral) {
       return <CoralSelectionScreen onSelect={(v) => {
         setSelectedCoral(v);
         setHasSelectedCoral(true);
+        // Save to storage
+        const state = loadState();
+        const user = state.users.find(u => u.id === state.currentUserId);
+        if (user) {
+          user.variant = v as any;
+          user.hasSelectedCoral = true;
+          saveState(state);
+        }
+        setAppState(state);
       }} />;
     }
 
+    const currentUser = appState.users.find(u => u.id === appState.currentUserId);
+    const stats = currentUser?.stats || { totalValidSeconds: 0, totalSessions: 0, bestSessionSeconds: 0, currentStreak: 0, dailyProgressSeconds: 0, lastCompletedDate: null };
+
     switch (activeTab) {
-      case 'coral': return <CoralScreen variant={selectedCoral} day={displayDay} progress={0.65} />;
-      case 'stats': return <StatisticsScreen currentDay={currentDay} variant={selectedCoral} onPreviewDay={setPreviewDay} previewDay={previewDay} />;
+      case 'coral': return <CoralScreen variant={selectedCoral} day={displayDay} stats={stats} />;
+      case 'stats': return <StatisticsScreen currentDay={currentDay} variant={selectedCoral} onPreviewDay={setPreviewDay} previewDay={previewDay} stats={stats} history={appState.sessionHistory} />;
       case 'family': return <FamilyScreen />;
-      case 'settings': return <SettingsScreen onOpenDock={() => setIsDockModeOpen(true)} />;
-      default: return <CoralScreen variant={selectedCoral} day={displayDay} progress={0.65} />;
+      case 'settings': return (
+        <>
+          <SettingsScreen onOpenDock={handleStartDock} onReset={() => setShowResetConfirm(true)} />
+          {showResetConfirm && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+              <Card className="w-full max-w-xs p-6 space-y-6">
+                <div className="space-y-2 text-center">
+                  <h3 className="text-lg font-medium text-muted-navy">Reset Experience?</h3>
+                  <p className="text-sm text-slate-400 font-light">This will permanently clear all your progress and coral growth.</p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button 
+                    onClick={handleReset}
+                    className="w-full py-3 rounded-xl bg-red-500 text-white font-medium text-sm"
+                  >
+                    Yes, Reset Everything
+                  </button>
+                  <button 
+                    onClick={() => setShowResetConfirm(false)}
+                    className="w-full py-3 rounded-xl bg-slate-100 text-slate-600 font-medium text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </Card>
+            </div>
+          )}
+        </>
+      );
+      default: return <CoralScreen variant={selectedCoral} day={displayDay} stats={stats} />;
     }
   };
 
@@ -1323,11 +1619,13 @@ export default function App() {
       </main>
 
       <AnimatePresence>
-        {isDockModeOpen && (
+        {isDockModeOpen && activeSession && (
           <DockModeDisplay 
             variant={selectedCoral} 
             day={currentDay} 
-            onExit={() => setIsDockModeOpen(false)} 
+            sessionStartAt={activeSession.startAt}
+            dockId={activeSession.dockId}
+            onExit={handleEndSession} 
           />
         )}
       </AnimatePresence>
