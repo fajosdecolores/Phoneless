@@ -6,11 +6,16 @@ export interface UserStats {
   currentStreak: number;
   dailyProgressSeconds: number;
   lastCompletedDate: string | null; // ISO date string YYYY-MM-DD
+  lastProgressDate: string | null; // ISO date string YYYY-MM-DD
 }
 
 export interface User {
   id: string;
   name: string;
+  surname?: string;
+  age?: number;
+  email?: string;
+  phone?: string;
   variant: 'warm' | 'cool' | 'soft';
   hasSelectedCoral: boolean;
   stats: UserStats;
@@ -55,6 +60,7 @@ const DEFAULT_STATE: AppState = {
         currentStreak: 0,
         dailyProgressSeconds: 0,
         lastCompletedDate: null,
+        lastProgressDate: null,
       },
     },
   ],
@@ -76,6 +82,7 @@ export const loadState = (): AppState => {
       if (u.hasSelectedCoral === undefined) u.hasSelectedCoral = true;
       if (u.stats.dailyProgressSeconds === undefined) u.stats.dailyProgressSeconds = 0;
       if (u.stats.lastCompletedDate === undefined) u.stats.lastCompletedDate = null;
+      if (u.stats.lastProgressDate === undefined) u.stats.lastProgressDate = null;
     });
     return state;
   } catch (e) {

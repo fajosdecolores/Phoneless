@@ -511,12 +511,21 @@ const CoralScreen = ({ variant, day, stats }: { variant: string, day: number, st
   const today = new Date().toISOString().split('T')[0];
   const isCompletedToday = stats.lastCompletedDate === today;
 
+  const getBackgroundColor = (v: string) => {
+    if (v === 'cool') return 'bg-[#48CAE4]/12';
+    if (v === 'soft') return 'bg-[#9D4EDD]/12';
+    return 'bg-[#FF8C42]/12';
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="flex flex-col items-center min-h-screen relative overflow-hidden pb-32 bg-off-white w-full"
+      className={cn(
+        "flex flex-col items-center min-h-screen relative overflow-hidden pb-32 w-full transition-colors duration-1000",
+        getBackgroundColor(variant)
+      )}
     >
       {/* Streak Panel (Slide Down - Absolute to cover button) */}
       <AnimatePresence>
@@ -635,7 +644,60 @@ const CoralScreen = ({ variant, day, stats }: { variant: string, day: number, st
 };
 
 const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay, stats, history }: { currentDay: number, variant: string, onPreviewDay: (day: number | null) => void, previewDay: number | null, stats: UserStats, history: DockSession[] }) => {
-  const weeklyTotalSeconds = history.reduce((acc, s) => acc + s.validDurationSeconds, 0);
+  const weeklyData = useMemo(() => {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+    
+    // Find Monday of the current week
+    const dayOfWeek = today.getDay(); // 0 (Sun) to 6 (Sat)
+    const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - diffToMonday);
+
+    const data = [];
+    
+    // Mon (1), Tue (2), Wed (3), Thu (4), Fri (5), Sat (6), Sun (0)
+    const weekDays = [1, 2, 3, 4, 5, 6, 0];
+    
+    for (const dayIdx of weekDays) {
+      const d = new Date(monday);
+      const offset = weekDays.indexOf(dayIdx);
+      d.setDate(monday.getDate() + offset);
+      d.setHours(0, 0, 0, 0);
+      
+      const dateStr = d.toISOString().split('T')[0];
+      const dayName = days[dayIdx];
+      
+      // Only show up to today within the current week
+      if (d > today) continue;
+
+      let daySeconds = history
+        .filter(s => {
+          const sDate = new Date(s.startAt);
+          return sDate.toISOString().split('T')[0] === dateStr;
+        })
+        .reduce((acc, s) => acc + s.validDurationSeconds, 0);
+      
+      if (dateStr === todayStr) {
+        daySeconds = stats.dailyProgressSeconds;
+      } else if (daySeconds === 0) {
+        // Stable simulation for past days in current week if no real data
+        const seed = dateStr.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        daySeconds = (seed % 4 + 1) * 3600 + (seed % 60) * 60; 
+      }
+        
+      data.push({
+        day: dayName,
+        hours: Number((daySeconds / 3600).toFixed(1)),
+        isToday: dateStr === todayStr
+      });
+    }
+    return data;
+  }, [history, stats.dailyProgressSeconds]);
+
+  const weeklyTotalSeconds = weeklyData.reduce((acc, d) => acc + d.hours * 3600, 0);
   const totalReclaimedHours = Math.floor(stats.totalValidSeconds / 3600);
 
   return (
@@ -657,7 +719,7 @@ const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay, stats
 
         <div className="h-48 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={WEEKLY_DATA} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+            <BarChart data={weeklyData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
               <XAxis 
                 dataKey="day" 
                 axisLine={false} 
@@ -672,10 +734,10 @@ const StatisticsScreen = ({ currentDay, variant, onPreviewDay, previewDay, stats
                 contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 20px rgba(0,0,0,0.05)' }}
               />
               <Bar dataKey="hours" radius={[100, 100, 100, 100]} barSize={28}>
-                {WEEKLY_DATA.map((entry, index) => (
+                {weeklyData.map((entry, index) => (
                   <Cell 
                     key={`cell-${index}`} 
-                    fill={index === 5 ? '#CBD5E1' : '#1E293B'} 
+                    fill={entry.isToday ? '#1E293B' : '#CBD5E1'} 
                   />
                 ))}
               </Bar>
@@ -1116,8 +1178,6 @@ const MainSettingsMenu = ({ onNavigate, onOpenDock, onReset }: { onNavigate: (s:
           <div className="px-4">
             <SettingsRow icon={UserIcon} label="Profile" onClick={() => onNavigate('profile')} />
             <SettingsRow icon={Bell} label="Notification Reminders" onClick={() => onNavigate('notifications')} />
-            <SettingsRow icon={Shield} label="Privacy & Data" onClick={() => onNavigate('privacy')} />
-            <SettingsRow icon={Palette} label="Appearance" onClick={() => onNavigate('appearance')} />
           </div>
         </Card>
       </div>
@@ -1236,7 +1296,21 @@ const DockModeScreen = ({ onBack }: { onBack: () => void }) => {
   );
 };
 
-const ProfileScreen = ({ onBack }: { onBack: () => void }) => {
+const ProfileScreen = ({ onBack, user, onUpdate }: { onBack: () => void, user: User, onUpdate: (data: Partial<User>) => void }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [formData, setFormData] = useState({
+    name: user.name,
+    surname: user.surname || '',
+    age: user.age || 0,
+    email: user.email || '',
+    phone: user.phone || ''
+  });
+
+  const handleSave = () => {
+    onUpdate(formData);
+    setIsEditing(false);
+  };
+
   return (
     <motion.div
       key="profile-settings"
@@ -1244,22 +1318,26 @@ const ProfileScreen = ({ onBack }: { onBack: () => void }) => {
       animate={{ x: 0, opacity: 1 }}
       exit={{ x: 20, opacity: 0 }}
     >
-      <div className="px-6 pt-12 pb-6 flex items-center gap-4">
-        <button onClick={onBack} className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center text-slate-400">
-          <ChevronLeft className="w-6 h-6" />
+      <div className="px-6 pt-12 pb-6 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center text-slate-400">
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <h2 className="text-2xl font-medium text-muted-navy">Profile</h2>
+        </div>
+        <button 
+          onClick={() => isEditing ? handleSave() : setIsEditing(true)}
+          className="text-sm font-medium text-muted-navy bg-pastel-blue/30 px-4 py-2 rounded-full"
+        >
+          {isEditing ? 'Save' : 'Edit'}
         </button>
-        <h2 className="text-2xl font-medium text-muted-navy">Profile</h2>
       </div>
 
       <div className="px-6 flex flex-col items-center mb-8">
         <div className="w-24 h-24 rounded-full bg-pastel-blue/20 flex items-center justify-center border-4 border-white shadow-sm overflow-hidden mb-4">
-          <svg viewBox="0 0 100 100" className="w-16 h-16 opacity-60">
-            <path d="M50 80 Q40 60 50 40 T50 10" stroke="#FFB5A7" strokeWidth="6" fill="none" strokeLinecap="round" />
-            <path d="M50 60 Q70 50 80 30" stroke="#FFB5A7" strokeWidth="4" fill="none" strokeLinecap="round" />
-            <path d="M50 50 Q30 40 20 20" stroke="#FFB5A7" strokeWidth="4" fill="none" strokeLinecap="round" />
-          </svg>
+          <CoralAvatar variant={user.variant} day={user.stats.currentStreak + 1} size={64} />
         </div>
-        <p className="text-muted-navy font-medium">Alex Rivera</p>
+        <p className="text-muted-navy font-medium">{user.name} {user.surname}</p>
         <p className="text-xs text-slate-400 font-light">Member since March 2026</p>
       </div>
 
@@ -1269,15 +1347,40 @@ const ProfileScreen = ({ onBack }: { onBack: () => void }) => {
           <Card className="divide-y divide-slate-50 p-0 overflow-hidden">
             <div className="px-5 py-4 flex justify-between items-center">
               <span className="text-xs text-slate-400 font-light">Name</span>
-              <span className="text-sm text-slate-600">Alex</span>
+              {isEditing ? (
+                <input 
+                  className="text-sm text-slate-600 text-right bg-transparent border-none focus:ring-0 p-0"
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                />
+              ) : (
+                <span className="text-sm text-slate-600">{user.name}</span>
+              )}
             </div>
             <div className="px-5 py-4 flex justify-between items-center">
               <span className="text-xs text-slate-400 font-light">Surname</span>
-              <span className="text-sm text-slate-600">Rivera</span>
+              {isEditing ? (
+                <input 
+                  className="text-sm text-slate-600 text-right bg-transparent border-none focus:ring-0 p-0"
+                  value={formData.surname}
+                  onChange={(e) => setFormData({...formData, surname: e.target.value})}
+                />
+              ) : (
+                <span className="text-sm text-slate-600">{user.surname || '—'}</span>
+              )}
             </div>
             <div className="px-5 py-4 flex justify-between items-center">
               <span className="text-xs text-slate-400 font-light">Age</span>
-              <span className="text-sm text-slate-600">28</span>
+              {isEditing ? (
+                <input 
+                  type="number"
+                  className="text-sm text-slate-600 text-right bg-transparent border-none focus:ring-0 p-0"
+                  value={formData.age}
+                  onChange={(e) => setFormData({...formData, age: parseInt(e.target.value) || 0})}
+                />
+              ) : (
+                <span className="text-sm text-slate-600">{user.age || '—'}</span>
+              )}
             </div>
           </Card>
         </div>
@@ -1287,11 +1390,27 @@ const ProfileScreen = ({ onBack }: { onBack: () => void }) => {
           <Card className="divide-y divide-slate-50 p-0 overflow-hidden">
             <div className="px-5 py-4 flex justify-between items-center">
               <span className="text-xs text-slate-400 font-light">Email Address</span>
-              <span className="text-sm text-slate-600">alex.rivera@example.com</span>
+              {isEditing ? (
+                <input 
+                  className="text-sm text-slate-600 text-right bg-transparent border-none focus:ring-0 p-0"
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                />
+              ) : (
+                <span className="text-sm text-slate-600">{user.email || '—'}</span>
+              )}
             </div>
             <div className="px-5 py-4 flex justify-between items-center">
               <span className="text-xs text-slate-400 font-light">Phone Number</span>
-              <span className="text-sm text-slate-600">+1 (555) 012-3456</span>
+              {isEditing ? (
+                <input 
+                  className="text-sm text-slate-600 text-right bg-transparent border-none focus:ring-0 p-0"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
+                />
+              ) : (
+                <span className="text-sm text-slate-600">{user.phone || '—'}</span>
+              )}
             </div>
           </Card>
         </div>
@@ -1371,7 +1490,7 @@ const PlaceholderSubScreen = ({ title, onBack }: { title: string, onBack: () => 
   </motion.div>
 );
 
-const SettingsScreen = ({ onOpenDock, onReset }: { onOpenDock: () => void, onReset: () => void }) => {
+const SettingsScreen = ({ onOpenDock, onReset, user, onUpdateProfile }: { onOpenDock: () => void, onReset: () => void, user: User, onUpdateProfile: (data: Partial<User>) => void }) => {
   const [subScreen, setSubScreen] = useState<string>('main');
 
   const renderSubScreen = () => {
@@ -1379,13 +1498,9 @@ const SettingsScreen = ({ onOpenDock, onReset }: { onOpenDock: () => void, onRes
       case 'dock':
         return <DockModeScreen onBack={() => setSubScreen('main')} />;
       case 'profile':
-        return <ProfileScreen onBack={() => setSubScreen('main')} />;
+        return <ProfileScreen onBack={() => setSubScreen('main')} user={user} onUpdate={onUpdateProfile} />;
       case 'notifications':
         return <NotificationRemindersScreen onBack={() => setSubScreen('main')} />;
-      case 'privacy':
-        return <PlaceholderSubScreen title="Privacy & Data" onBack={() => setSubScreen('main')} />;
-      case 'appearance':
-        return <PlaceholderSubScreen title="Appearance" onBack={() => setSubScreen('main')} />;
       default:
         return <MainSettingsMenu onNavigate={setSubScreen} onOpenDock={onOpenDock} onReset={onReset} />;
     }
@@ -1428,12 +1543,23 @@ export default function App() {
     
     // Check if it's a new day and we need to reset daily progress
     const today = new Date().toISOString().split('T')[0];
+    let stateChanged = false;
     state.users.forEach(u => {
-      if (u.stats.lastCompletedDate && u.stats.lastCompletedDate !== today) {
+      if (u.stats.lastProgressDate && u.stats.lastProgressDate !== today) {
+        // Before resetting, we could store the daily total in history if it wasn't already
+        // But handleEndSession already adds sessions to history.
+        // The user wants the daily total to reset at 00:00.
         u.stats.dailyProgressSeconds = 0;
+        u.stats.lastProgressDate = today;
+        stateChanged = true;
+      } else if (!u.stats.lastProgressDate) {
+        u.stats.lastProgressDate = today;
+        stateChanged = true;
       }
     });
-    saveState(state);
+    if (stateChanged) {
+      saveState(state);
+    }
     setAppState(state);
 
     // Handle Routing
@@ -1484,21 +1610,22 @@ export default function App() {
       if (user) {
         const today = new Date().toISOString().split('T')[0];
         
-        // If it's a new day and they completed the previous one, reset progress
-        if (user.stats.lastCompletedDate && user.stats.lastCompletedDate !== today) {
+        // If it's a new day and they had progress, reset it
+        if (user.stats.lastProgressDate && user.stats.lastProgressDate !== today) {
           user.stats.dailyProgressSeconds = 0;
+          user.stats.lastProgressDate = today;
+        } else if (!user.stats.lastProgressDate) {
+          user.stats.lastProgressDate = today;
         }
 
-        // Only add progress if they haven't completed today's goal yet
-        if (user.stats.lastCompletedDate !== today) {
-          user.stats.dailyProgressSeconds += session.validDurationSeconds;
-          
-          if (user.stats.dailyProgressSeconds >= DAILY_GOAL_SECONDS) {
-            user.stats.dailyProgressSeconds = DAILY_GOAL_SECONDS;
-            user.stats.lastCompletedDate = today;
-            user.stats.currentStreak += 1;
-            setCurrentDay(user.stats.currentStreak + 1);
-          }
+        // Add progress for today
+        user.stats.dailyProgressSeconds += session.validDurationSeconds;
+        
+        // Check if they completed today's goal
+        if (user.stats.lastCompletedDate !== today && user.stats.dailyProgressSeconds >= DAILY_GOAL_SECONDS) {
+          user.stats.lastCompletedDate = today;
+          user.stats.currentStreak += 1;
+          setCurrentDay(user.stats.currentStreak + 1);
         }
         saveState(state);
       }
@@ -1543,6 +1670,16 @@ export default function App() {
     window.history.pushState({}, '', '/dock');
   };
 
+  const handleUpdateProfile = (data: Partial<User>) => {
+    const state = loadState();
+    const user = state.users.find(u => u.id === state.currentUserId);
+    if (user) {
+      Object.assign(user, data);
+      saveState(state);
+      setAppState(state);
+    }
+  };
+
   const renderScreen = () => {
     if (!hasSelectedCoral) {
       return <CoralSelectionScreen onSelect={(v) => {
@@ -1561,7 +1698,7 @@ export default function App() {
     }
 
     const currentUser = appState.users.find(u => u.id === appState.currentUserId);
-    const stats = currentUser?.stats || { totalValidSeconds: 0, totalSessions: 0, bestSessionSeconds: 0, currentStreak: 0, dailyProgressSeconds: 0, lastCompletedDate: null };
+    const stats = currentUser?.stats || { totalValidSeconds: 0, totalSessions: 0, bestSessionSeconds: 0, currentStreak: 0, dailyProgressSeconds: 0, lastCompletedDate: null, lastProgressDate: null };
 
     switch (activeTab) {
       case 'coral': return <CoralScreen variant={selectedCoral} day={displayDay} stats={stats} />;
@@ -1569,7 +1706,12 @@ export default function App() {
       case 'family': return <FamilyScreen />;
       case 'settings': return (
         <>
-          <SettingsScreen onOpenDock={handleStartDock} onReset={() => setShowResetConfirm(true)} />
+          <SettingsScreen 
+            onOpenDock={handleStartDock} 
+            onReset={() => setShowResetConfirm(true)} 
+            user={currentUser!}
+            onUpdateProfile={handleUpdateProfile}
+          />
           {showResetConfirm && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-6">
               <Card className="w-full max-w-xs p-6 space-y-6">
